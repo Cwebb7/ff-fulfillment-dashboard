@@ -147,10 +147,16 @@ tr.selected td{background:#eaf0fa;}
     <div class="toolbar">
       <input type="text" id="mar-search" placeholder="Search variety, SKU, or grind type...">
       <div class="grp"><label>Section</label><select id="mar-section"><option value="">All</option></select></div>
+      <div class="grp"><label>Luna cost quarter</label><select id="mar-quarter">
+        <option value="q1">Jan–Mar 2026 (Q1)</option>
+        <option value="q2">Apr–Jun 2026 (Q2)</option>
+        <option value="q3">Jul–Sep 2026 (Q3)</option>
+      </select></div>
       <div class="result-count" id="mar-count"></div>
     </div>
+    <div class="hint">COGS % / GM % recompute against the selected quarter's Luna cost. Suggested Price reflects the Q2 pricing scenario from the source workbook regardless of quarter selected.</div>
     <div class="chart-row single">
-      <div class="chart-card"><h3>Avg COGS% vs GM% by Section</h3><canvas id="chart-mar-section"></canvas></div>
+      <div class="chart-card"><h3 id="chart-mar-section-title">Avg COGS% vs GM% by Section</h3><canvas id="chart-mar-section"></canvas></div>
     </div>
     <div class="table-card">
       <table id="tbl-margin"><thead></thead><tbody></tbody></table>
@@ -512,7 +518,8 @@ function renderSku() {
 // ============================================================
 // MARGIN VIEW
 // ============================================================
-const marState = { search:'', section:'', sortCol:'currentPrice', sortDir:'desc', page:0, pageSize:15 };
+const marState = { search:'', section:'', quarter:'q1', sortCol:'currentPrice', sortDir:'desc', page:0, pageSize:15 };
+const QUARTER_LABELS = { q1:'Jan–Mar 2026 (Q1)', q2:'Apr–Jun 2026 (Q2)', q3:'Jul–Sep 2026 (Q3)' };
 let marSectionChart;
 
 function initMarginControls() {
@@ -521,6 +528,18 @@ function initMarginControls() {
   sections.forEach(s => sel.innerHTML += `<option value="${s}">${s}</option>`);
   sel.addEventListener('change', () => { marState.section = sel.value; marState.page=0; renderMargin(); });
   document.getElementById('mar-search').addEventListener('input', (e) => { marState.search = e.target.value.toLowerCase(); marState.page=0; renderMargin(); });
+  document.getElementById('mar-quarter').addEventListener('change', (e) => { marState.quarter = e.target.value; renderMargin(); });
+}
+
+// Recompute COGS% / GM% against the selected quarter's Luna cost vs current price,
+// rather than relying on the static cogsPct/gmPct in the source data (which was
+// fixed to Q1). Falls back to '-' when either input is missing.
+function withQuarterMargin(item) {
+  const lunaCost = item[marState.quarter];
+  const hasBoth = lunaCost !== null && lunaCost !== undefined && item.currentPrice !== null && item.currentPrice !== undefined && item.currentPrice !== 0;
+  const cogsPct = hasBoth ? (lunaCost / item.currentPrice) * 100 : null;
+  const gmPct = hasBoth ? 100 - cogsPct : null;
+  return { ...item, cogsPct, gmPct, lunaCost };
 }
 
 function getMarginFiltered() {
@@ -531,7 +550,7 @@ function getMarginFiltered() {
       if (!hay.includes(marState.search)) return false;
     }
     return true;
-  });
+  }).map(withQuarterMargin);
 }
 
 function renderMargin() {
@@ -539,10 +558,11 @@ function renderMargin() {
   data.sort((a,b) => compareValues(a[marState.sortCol], b[marState.sortCol], marState.sortDir));
   document.getElementById('mar-count').textContent = data.length + ' SKUs';
 
+  const qLabel = QUARTER_LABELS[marState.quarter];
   const cols = [
     {key:'section', label:'Section'}, {key:'sku', label:'SKU'}, {key:'variety', label:'Variety'},
     {key:'grind', label:'Grind'}, {key:'currentPrice', label:'Current Price'},
-    {key:'cogsPct', label:'COGS %'}, {key:'gmPct', label:'GM %'},
+    {key:'cogsPct', label:`COGS % (${qLabel})`}, {key:'gmPct', label:`GM % (${qLabel})`},
     {key:'suggestedPrice', label:'Suggested Price'}, {key:'changeInPrice', label:'Change'}
   ];
   const thead = document.querySelector('#tbl-margin thead');
@@ -580,6 +600,7 @@ function renderMargin() {
   const secLabels = Object.keys(bySection);
   const cogsAvg = secLabels.map(s => { const a=bySection[s].cogs; return a.length? a.reduce((x,y)=>x+y,0)/a.length : 0; });
   const gmAvg = secLabels.map(s => { const a=bySection[s].gm; return a.length? a.reduce((x,y)=>x+y,0)/a.length : 0; });
+  document.getElementById('chart-mar-section-title').textContent = `Avg COGS% vs GM% by Section (${qLabel} Luna cost)`;
   if (marSectionChart) marSectionChart.destroy();
   marSectionChart = new Chart(document.getElementById('chart-mar-section').getContext('2d'), {
     type:'bar', data:{ labels: secLabels, datasets:[
