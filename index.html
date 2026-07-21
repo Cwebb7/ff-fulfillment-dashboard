@@ -58,6 +58,8 @@ tr.selected td{background:#eaf0fa;}
 .pagination{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:12px;color:var(--text-secondary);}
 .pagination button{background:#fff;border:1px solid #dee2e6;padding:5px 10px;border-radius:5px;cursor:pointer;font-size:12px;}
 .pagination button:disabled{opacity:.4;cursor:default;}
+.clear-btn{padding:8px 14px;border:1px solid #dee2e6;border-radius:6px;background:#fff;font-size:12px;font-weight:500;cursor:pointer;color:var(--text-secondary);white-space:nowrap;}
+.clear-btn:hover{background:#f1f3f5;color:var(--text-primary);}
 @media (max-width:900px){.chart-row{grid-template-columns:1fr;}}
 </style>
 </head>
@@ -80,10 +82,15 @@ tr.selected td{background:#eaf0fa;}
 
   <!-- OVERVIEW -->
   <div class="view active" id="view-overview">
+    <div class="toolbar">
+      <div class="grp"><label>From</label><select id="overview-from"></select></div>
+      <div class="grp"><label>To</label><select id="overview-to"></select></div>
+      <div class="result-count" id="overview-range-label"></div>
+    </div>
     <div class="kpi-row">
-      <div class="kpi-card"><div class="kpi-label">Total FF Revenue (all-time)</div><div class="kpi-value" id="kpi-total-rev">-</div><div class="kpi-sub" id="kpi-total-rev-sub"></div></div>
-      <div class="kpi-card"><div class="kpi-label">Active Franchises</div><div class="kpi-value" id="kpi-active-fran">-</div><div class="kpi-sub">with revenue in last 3 months</div></div>
-      <div class="kpi-card"><div class="kpi-label">Avg Monthly Revenue / Franchise</div><div class="kpi-value" id="kpi-avg-rev">-</div><div class="kpi-sub">trailing 3 months</div></div>
+      <div class="kpi-card"><div class="kpi-label">Total FF Revenue</div><div class="kpi-value" id="kpi-total-rev">-</div><div class="kpi-sub" id="kpi-total-rev-sub"></div></div>
+      <div class="kpi-card"><div class="kpi-label">Active Franchises</div><div class="kpi-value" id="kpi-active-fran">-</div><div class="kpi-sub" id="kpi-active-fran-sub">with revenue in last 3 months of range</div></div>
+      <div class="kpi-card"><div class="kpi-label">Avg Monthly Revenue / Franchise</div><div class="kpi-value" id="kpi-avg-rev">-</div><div class="kpi-sub">trailing 3 months of range</div></div>
       <div class="kpi-card"><div class="kpi-label">Avg Gross Margin</div><div class="kpi-value" id="kpi-avg-gm">-</div><div class="kpi-sub" id="kpi-avg-gm-sub"></div></div>
     </div>
     <div class="chart-row">
@@ -101,6 +108,7 @@ tr.selected td{background:#eaf0fa;}
       <input type="text" id="rev-search" placeholder="Search franchise name...">
       <div class="grp"><label>From</label><select id="rev-from"></select></div>
       <div class="grp"><label>To</label><select id="rev-to"></select></div>
+      <button class="clear-btn" id="rev-clear-btn">Clear selections</button>
       <div class="result-count" id="rev-count"></div>
     </div>
     <div class="chart-row">
@@ -120,6 +128,7 @@ tr.selected td{background:#eaf0fa;}
       <input type="text" id="sku-search" placeholder="Search SKU or product name...">
       <div class="grp"><label>Category</label><select id="sku-category"><option value="">All</option></select></div>
       <div class="grp"><label>Subcategory</label><select id="sku-subcategory"><option value="">All</option></select></div>
+      <button class="clear-btn" id="sku-clear-btn">Clear selections</button>
       <div class="result-count" id="sku-count"></div>
     </div>
     <div class="chart-row">
@@ -140,9 +149,8 @@ tr.selected td{background:#eaf0fa;}
       <div class="grp"><label>Section</label><select id="mar-section"><option value="">All</option></select></div>
       <div class="result-count" id="mar-count"></div>
     </div>
-    <div class="chart-row">
+    <div class="chart-row single">
       <div class="chart-card"><h3>Avg COGS% vs GM% by Section</h3><canvas id="chart-mar-section"></canvas></div>
-      <div class="chart-card"><h3>Current vs Suggested Price (filtered, top 15 by price)</h3><canvas id="chart-mar-price"></canvas></div>
     </div>
     <div class="table-card">
       <table id="tbl-margin"><thead></thead><tbody></tbody></table>
@@ -204,14 +212,33 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // ============================================================
 // OVERVIEW
 // ============================================================
+const overviewState = { from: 0, to: REV.months.length-1 };
+let overviewTrendChart, overviewCatChart, overviewTopChart;
+
+function initOverviewControls() {
+  const fromSel = document.getElementById('overview-from');
+  const toSel = document.getElementById('overview-to');
+  REV.months.forEach((m,i) => {
+    fromSel.innerHTML += `<option value="${i}">${m}</option>`;
+    toSel.innerHTML += `<option value="${i}">${m}</option>`;
+  });
+  fromSel.value = overviewState.from;
+  toSel.value = overviewState.to;
+  fromSel.addEventListener('change', () => { overviewState.from = +fromSel.value; renderOverview(); });
+  toSel.addEventListener('change', () => { overviewState.to = +toSel.value; renderOverview(); });
+}
+
 function renderOverview() {
-  const months = REV.months;
-  const totals = months.map((m, i) => REV.franchises.reduce((s, f) => s + f.monthly[i], 0));
+  const from = overviewState.from, to = overviewState.to;
+  const months = REV.months.slice(from, to+1);
+  const totals = months.map((m, i) => REV.franchises.reduce((s, f) => s + f.monthly[from+i], 0));
   const grandTotal = totals.reduce((a,b) => a+b, 0);
   const last3 = totals.slice(-3);
-  const activeFran = REV.franchises.filter(f => f.monthly.slice(-3).some(v => v > 0)).length;
-  const avgPerFranchise = last3.reduce((a,b)=>a+b,0) / 3 / (activeFran || 1);
+  const rangeFranchises = REV.franchises.map(f => ({ ...f, rangeTotal: f.monthly.slice(from, to+1).reduce((a,b)=>a+b,0) }));
+  const activeFran = rangeFranchises.filter(f => f.monthly.slice(Math.max(from, to-2), to+1).some(v => v > 0)).length;
+  const avgPerFranchise = last3.reduce((a,b)=>a+b,0) / (last3.length||1) / (activeFran || 1);
 
+  document.getElementById('overview-range-label').textContent = months.length + ' months selected';
   document.getElementById('kpi-total-rev').textContent = fmt(grandTotal, 'currency0');
   document.getElementById('kpi-total-rev-sub').textContent = months[0] + ' – ' + months[months.length-1];
   document.getElementById('kpi-active-fran').textContent = activeFran;
@@ -222,7 +249,8 @@ function renderOverview() {
   document.getElementById('kpi-avg-gm').textContent = fmt(avgGm, 'percent');
   document.getElementById('kpi-avg-gm-sub').textContent = gmVals.length + ' priced SKUs';
 
-  new Chart(document.getElementById('chart-overview-trend').getContext('2d'), {
+  if (overviewTrendChart) overviewTrendChart.destroy();
+  overviewTrendChart = new Chart(document.getElementById('chart-overview-trend').getContext('2d'), {
     type: 'line',
     data: { labels: months, datasets: [{ label: 'Total Revenue', data: totals, borderColor: COLORS[0], backgroundColor: COLORS[0]+'20', borderWidth: 2, fill: true, tension: 0.3, pointRadius: 2 }] },
     options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}, tooltip:{callbacks:{label: c => fmt(c.parsed.y,'currency0')}}}, scales:{ y:{ beginAtZero:true, ticks:{ callback: v => fmt(v,'currency0') } } } }
@@ -230,21 +258,24 @@ function renderOverview() {
 
   const catTotals = {};
   SKU.skus.forEach(s => {
-    const last3v = s.monthly.slice(-3).filter(v => v !== null);
+    const rangeVals = s.monthly.slice(from, to+1).filter(v => v !== null);
+    const last3v = rangeVals.slice(-3);
     const avg = last3v.length ? last3v.reduce((a,b)=>a+b,0)/last3v.length : 0;
     catTotals[s.category] = (catTotals[s.category] || 0) + avg;
   });
   const catLabels = Object.keys(catTotals);
-  new Chart(document.getElementById('chart-overview-cat').getContext('2d'), {
+  if (overviewCatChart) overviewCatChart.destroy();
+  overviewCatChart = new Chart(document.getElementById('chart-overview-cat').getContext('2d'), {
     type: 'doughnut',
     data: { labels: catLabels, datasets: [{ data: catLabels.map(c => catTotals[c]), backgroundColor: COLORS, borderColor:'#fff', borderWidth:2 }] },
     options: { responsive:true, maintainAspectRatio:false, cutout:'60%', plugins:{ legend:{ position:'right', labels:{usePointStyle:true} }, tooltip:{ callbacks:{ label: c => c.label + ': ' + fmt(c.parsed,'currency') } } } }
   });
 
-  const top10 = [...REV.franchises].sort((a,b)=>b.total-a.total).slice(0,10);
-  new Chart(document.getElementById('chart-overview-top').getContext('2d'), {
+  const top10 = [...rangeFranchises].sort((a,b)=>b.rangeTotal-a.rangeTotal).slice(0,10);
+  if (overviewTopChart) overviewTopChart.destroy();
+  overviewTopChart = new Chart(document.getElementById('chart-overview-top').getContext('2d'), {
     type: 'bar',
-    data: { labels: top10.map(f=>f.name), datasets:[{ data: top10.map(f=>f.total), backgroundColor: COLORS[0]+'CC', borderRadius:4 }] },
+    data: { labels: top10.map(f=>f.name), datasets:[{ data: top10.map(f=>f.rangeTotal), backgroundColor: COLORS[0]+'CC', borderRadius:4 }] },
     options: { responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>fmt(c.parsed.x,'currency0')}}}, scales:{ x:{ beginAtZero:true, ticks:{ callback:v=>fmt(v,'currency0') } } } }
   });
 }
@@ -267,6 +298,7 @@ function initRevenueControls() {
   fromSel.addEventListener('change', () => { revState.from = +fromSel.value; revState.page=0; renderRevenue(); });
   toSel.addEventListener('change', () => { revState.to = +toSel.value; revState.page=0; renderRevenue(); });
   document.getElementById('rev-search').addEventListener('input', (e) => { revState.search = e.target.value.toLowerCase(); revState.page=0; renderRevenue(); });
+  document.getElementById('rev-clear-btn').addEventListener('click', () => { revState.selected = []; renderRevenue(); });
 }
 
 function getRevenueFiltered() {
@@ -378,6 +410,7 @@ function initSkuControls() {
   catSel.addEventListener('change', () => { skuState.category = catSel.value; skuState.subcategory=''; refreshSubcats(); skuState.page=0; renderSku(); });
   subcatSel.addEventListener('change', () => { skuState.subcategory = subcatSel.value; skuState.page=0; renderSku(); });
   document.getElementById('sku-search').addEventListener('input', (e) => { skuState.search = e.target.value.toLowerCase(); skuState.page=0; renderSku(); });
+  document.getElementById('sku-clear-btn').addEventListener('click', () => { skuState.selected = []; renderSku(); });
 }
 
 function getSkuFiltered() {
@@ -471,7 +504,7 @@ function renderSku() {
 // MARGIN VIEW
 // ============================================================
 const marState = { search:'', section:'', sortCol:'currentPrice', sortDir:'desc', page:0, pageSize:15 };
-let marSectionChart, marPriceChart;
+let marSectionChart;
 
 function initMarginControls() {
   const sections = [...new Set(MAR.items.map(i=>i.section))].sort();
@@ -552,22 +585,12 @@ function renderMargin() {
     ]},
     options:{ responsive:true, maintainAspectRatio:false, plugins:{ legend:{position:'top'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y.toFixed(1)+'%'}} }, scales:{ y:{ ticks:{callback:v=>v.toFixed(0)+'%'} } } }
   });
-
-  const top15 = [...data].filter(i=>i.currentPrice!==null).sort((a,b)=>b.currentPrice-a.currentPrice).slice(0,15);
-  if (marPriceChart) marPriceChart.destroy();
-  marPriceChart = new Chart(document.getElementById('chart-mar-price').getContext('2d'), {
-    type:'bar', data:{ labels: top15.map(i=>i.sku), datasets:[
-      { label:'Current Price', data: top15.map(i=>i.currentPrice), backgroundColor: COLORS[0]+'CC', borderRadius:4 },
-      { label:'Suggested Price', data: top15.map(i=>i.suggestedPrice), backgroundColor: COLORS[1]+'CC', borderRadius:4 }
-    ]},
-    options:{ responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{ legend:{position:'top'}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmt(c.parsed.x,'currency')}} }, scales:{ x:{ ticks:{callback:v=>fmt(v,'currency')} } } }
-  });
 }
 
 // ============================================================
 // INIT
 // ============================================================
-renderOverview();
+initOverviewControls(); renderOverview();
 initRevenueControls(); renderRevenue();
 initSkuControls(); renderSku();
 initMarginControls(); renderMargin();
