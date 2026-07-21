@@ -655,29 +655,36 @@ function setLiveIndicator(state, label) {
   el.textContent = label;
 }
 
-// customsearch2726 ("Franchise Transactions - No COGS") returns one row per
-// franchise with 27 unlabeled "Formula (Currency)" columns in the same
-// May 2024 - Jul 2026 order as REV.months. We rebuild REV.franchises from
-// those rows, keeping the existing REV.months labels since NetSuite doesn't
-// return month headers for formula columns.
-function transformRevenueRows(rows) {
-  const monthCount = REV.months.length;
-  const franchises = rows.map(row => {
-    const monthly = [];
-    for (let i = 0; i < monthCount; i++) {
-      const key = i === 0 ? 'Formula (Currency)' : `Formula (Currency)_${i}`;
-      const v = parseFloat(row[key]);
-      monthly.push(isNaN(v) ? 0 : v);
-    }
-    const rawName = row.Name || row.name || '';
-    // If NetSuite hasn't been updated to resolve entity names, this will be
-    // a raw internal ID (e.g. "109") — label it clearly rather than showing
-    // a bare number with no context.
-    const isBareId = /^\d+$/.test(String(rawName).trim());
-    const name = isBareId ? `Franchise #${rawName}` : rawName;
-    return { raw: rawName, name, monthly, total: Math.round(monthly.reduce((a,b)=>a+b,0)*100)/100 };
+// The RESTlet's existing `fran` type (already Released — no SuiteScript
+// changes needed) runs customsearch2714 ("FF Transactions with Rev, Costs,
+// GM%") and returns one row PER INVOICE: { d (ISO date), inv, customer,
+// rev, ship, disc, cogs, gm, gmp, po }. Customer names are resolved
+// server-side via getText(), so no raw internal IDs leak through. We
+// aggregate invoice rows into per-franchise monthly totals to match the
+// REV.franchises shape the rest of the dashboard already expects.
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function monthLabelToKey(label) {
+  const [mon, yr] = label.split(' ');
+  const idx = MONTH_NAMES.indexOf(mon);
+  return `${yr}-${String(idx + 1).padStart(2, '0')}`;
+}
+
+function transformFranRows(rows) {
+  const byCustomer = {};
+  rows.forEach(row => {
+    const name = (row.customer || '').trim() || 'Unknown';
+    const monthKey = row.d ? String(row.d).slice(0, 7) : null;
+    if (!monthKey) return;
+    if (!byCustomer[name]) byCustomer[name] = {};
+    byCustomer[name][monthKey] = (byCustomer[name][monthKey] || 0) + (parseFloat(row.rev) || 0);
   });
-  franchises.sort((a,b) => b.total - a.total);
+  const monthKeys = REV.months.map(monthLabelToKey);
+  const franchises = Object.keys(byCustomer).map(name => {
+    const monthly = monthKeys.map(k => Math.round((byCustomer[name][k] || 0) * 100) / 100);
+    const total = Math.round(monthly.reduce((a, b) => a + b, 0) * 100) / 100;
+    return { raw: name, name, monthly, total };
+  });
+  franchises.sort((a, b) => b.total - a.total);
   return franchises;
 }
 
@@ -688,16 +695,16 @@ async function loadLiveRevenue() {
   try {
     let rows = [];
     let page = 0, hasMore = true;
-    while (hasMore && page < 10) {
-      const d = await callRESTlet({ type: 'ff_revenue', page });
-      const chunk = (d.revenue && d.revenue.rows) || d.rows || (Array.isArray(d) ? d : []);
+    while (hasMore && page < 20) {
+      const d = await callRESTlet({ type: 'fran', page });
+      const chunk = (d.fran && d.fran.rows) || [];
       rows.push(...chunk);
-      hasMore = !!((d.revenue && d.revenue.hasMore) || d.hasMore);
+      hasMore = !!(d.fran && d.fran.hasMore);
       page++;
     }
-    if (!rows.length) throw new Error('NetSuite returned no rows for type "ff_revenue"');
+    if (!rows.length) throw new Error('NetSuite returned no rows for type "fran"');
 
-    REV.franchises = transformRevenueRows(rows);
+    REV.franchises = transformFranRows(rows);
     overviewState.from = 0; overviewState.to = REV.months.length - 1;
     revState.from = 0; revState.to = REV.months.length - 1; revState.page = 0;
     renderOverview();
@@ -705,7 +712,7 @@ async function loadLiveRevenue() {
 
     setLiveIndicator('live', 'Live from NetSuite');
     document.getElementById('data-source-sub').textContent =
-      'Franchise revenue is live from NetSuite (customsearch2726). SKU pricing and margin still use the Fran COGs Worksheet snapshot (07.17.26).';
+      'Franchise revenue is live from NetSuite (customsearch2714, FF Transactions with Rev, Costs, GM%). SKU pricing and margin still use the Fran COGs Worksheet snapshot (07.17.26).';
   } catch (e) {
     console.warn('Live NetSuite fetch failed, staying on cached snapshot:', e.message);
     setLiveIndicator('error', 'Live feed unavailable — showing cached data');
@@ -724,10 +731,9 @@ initRevenueControls(); renderRevenue();
 initSkuControls(); renderSku();
 initMarginControls(); renderMargin();
 
-// Attempt a live NetSuite refresh on load. If the RESTlet doesn't yet
-// recognize `type: 'ff_revenue'` (or credentials aren't fully configured),
-// this fails silently into the cached-snapshot state above — the static
-// dashboard keeps working exactly as before.
+// Attempt a live NetSuite refresh on load. If credentials aren't fully
+// configured yet, this fails silently into the cached-snapshot state above
+// — the static dashboard keeps working exactly as before.
 loadLiveRevenue();
 
 </script>
