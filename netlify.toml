@@ -1,0 +1,14 @@
+[build]
+functions = "netlify/functions"
+
+[functions]
+node_bundler = "esbuild"
+
+[functions.netsuite]
+timeout = 26
+
+[[headers]]
+for = "/*"
+[headers.values]
+Access-Control-Allow-Origin = "*"
+Access-Control-Allow-Headers = "Content-Type"

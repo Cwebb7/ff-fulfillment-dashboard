@@ -60,6 +60,19 @@ tr.selected td{background:#eaf0fa;}
 .pagination button:disabled{opacity:.4;cursor:default;}
 .clear-btn{padding:8px 14px;border:1px solid #dee2e6;border-radius:6px;background:#fff;font-size:12px;font-weight:500;cursor:pointer;color:var(--text-secondary);white-space:nowrap;}
 .clear-btn:hover{background:#f1f3f5;color:var(--text-primary);}
+.live-status{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+.live-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;}
+.live-pill::before{content:'';width:7px;height:7px;border-radius:50%;}
+.live-pill-cached{background:rgba(255,255,255,.1);color:rgba(255,255,255,.85);}
+.live-pill-cached::before{background:#adb5bd;}
+.live-pill-live{background:rgba(40,167,69,.18);color:#7ee08a;}
+.live-pill-live::before{background:#28a745;}
+.live-pill-error{background:rgba(220,53,69,.18);color:#ff8f9a;}
+.live-pill-error::before{background:#dc3545;}
+.live-pill-loading::before{background:#DD8452;}
+.refresh-btn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25);color:#fff;}
+.refresh-btn:hover{background:rgba(255,255,255,.2);color:#fff;}
+.refresh-btn:disabled{opacity:.5;cursor:default;}
 @media (max-width:900px){.chart-row{grid-template-columns:1fr;}}
 </style>
 </head>
@@ -69,7 +82,11 @@ tr.selected td{background:#eaf0fa;}
     <div class="header-top">
       <div>
         <h1>Franchise Fulfillment Dashboard</h1>
-        <div class="sub">Franchise revenue, SKU pricing trends &amp; margin — sourced from Fran COGs Worksheet (07.17.26), May 2024–Jul 2026</div>
+        <div class="sub" id="data-source-sub">Franchise revenue, SKU pricing trends &amp; margin — sourced from Fran COGs Worksheet (07.17.26), May 2024–Jul 2026</div>
+      </div>
+      <div class="live-status">
+        <span id="live-indicator" class="live-pill live-pill-cached">Cached Excel snapshot</span>
+        <button id="refresh-live-btn" class="clear-btn refresh-btn">Refresh from NetSuite</button>
       </div>
     </div>
     <div class="tabs">
@@ -612,12 +629,106 @@ function renderMargin() {
 }
 
 // ============================================================
+// LIVE NETSUITE FEED
+// ============================================================
+// Calls the Netlify proxy function, which signs and forwards the request to
+// the NetSuite RESTlet (credentials live in Netlify env vars — never sent
+// from the browser). The RESTlet must recognize the `type` values below;
+// until it does, every call fails gracefully and the dashboard keeps
+// showing the cached Excel snapshot embedded at build time.
+async function callRESTlet(params = {}) {
+  const res = await fetch('/.netlify/functions/netsuite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Proxy error ${res.status}`);
+  }
+  return res.json();
+}
+
+function setLiveIndicator(state, label) {
+  const el = document.getElementById('live-indicator');
+  el.className = 'live-pill live-pill-' + state;
+  el.textContent = label;
+}
+
+// customsearch2726 ("Franchise Transactions - No COGS") returns one row per
+// franchise with 27 unlabeled "Formula (Currency)" columns in the same
+// May 2024 - Jul 2026 order as REV.months. We rebuild REV.franchises from
+// those rows, keeping the existing REV.months labels since NetSuite doesn't
+// return month headers for formula columns.
+function transformRevenueRows(rows) {
+  const monthCount = REV.months.length;
+  const franchises = rows.map(row => {
+    const monthly = [];
+    for (let i = 0; i < monthCount; i++) {
+      const key = i === 0 ? 'Formula (Currency)' : `Formula (Currency)_${i}`;
+      const v = parseFloat(row[key]);
+      monthly.push(isNaN(v) ? 0 : v);
+    }
+    const rawName = row.Name || row.name || '';
+    // If NetSuite hasn't been updated to resolve entity names, this will be
+    // a raw internal ID (e.g. "109") — label it clearly rather than showing
+    // a bare number with no context.
+    const isBareId = /^\d+$/.test(String(rawName).trim());
+    const name = isBareId ? `Franchise #${rawName}` : rawName;
+    return { raw: rawName, name, monthly, total: Math.round(monthly.reduce((a,b)=>a+b,0)*100)/100 };
+  });
+  franchises.sort((a,b) => b.total - a.total);
+  return franchises;
+}
+
+async function loadLiveRevenue() {
+  setLiveIndicator('loading', 'Checking NetSuite…');
+  const btn = document.getElementById('refresh-live-btn');
+  btn.disabled = true;
+  try {
+    let rows = [];
+    let page = 0, hasMore = true;
+    while (hasMore && page < 10) {
+      const d = await callRESTlet({ type: 'ff_revenue', page });
+      const chunk = (d.revenue && d.revenue.rows) || d.rows || (Array.isArray(d) ? d : []);
+      rows.push(...chunk);
+      hasMore = !!((d.revenue && d.revenue.hasMore) || d.hasMore);
+      page++;
+    }
+    if (!rows.length) throw new Error('NetSuite returned no rows for type "ff_revenue"');
+
+    REV.franchises = transformRevenueRows(rows);
+    overviewState.from = 0; overviewState.to = REV.months.length - 1;
+    revState.from = 0; revState.to = REV.months.length - 1; revState.page = 0;
+    renderOverview();
+    renderRevenue();
+
+    setLiveIndicator('live', 'Live from NetSuite');
+    document.getElementById('data-source-sub').textContent =
+      'Franchise revenue is live from NetSuite (customsearch2726). SKU pricing and margin still use the Fran COGs Worksheet snapshot (07.17.26).';
+  } catch (e) {
+    console.warn('Live NetSuite fetch failed, staying on cached snapshot:', e.message);
+    setLiveIndicator('error', 'Live feed unavailable — showing cached data');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('refresh-live-btn').addEventListener('click', loadLiveRevenue);
+
+// ============================================================
 // INIT
 // ============================================================
 initOverviewControls(); renderOverview();
 initRevenueControls(); renderRevenue();
 initSkuControls(); renderSku();
 initMarginControls(); renderMargin();
+
+// Attempt a live NetSuite refresh on load. If the RESTlet doesn't yet
+// recognize `type: 'ff_revenue'` (or credentials aren't fully configured),
+// this fails silently into the cached-snapshot state above — the static
+// dashboard keeps working exactly as before.
+loadLiveRevenue();
 
 </script>
 </body>
