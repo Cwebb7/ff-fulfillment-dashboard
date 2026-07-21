@@ -669,10 +669,17 @@ function monthLabelToKey(label) {
   return `${yr}-${String(idx + 1).padStart(2, '0')}`;
 }
 
+// NetSuite's getText() on the customer column returns "<internal id> <name>"
+// (e.g. "11 BAC-1012-Naples") — the cached Excel snapshot already strips
+// that numeric prefix, so live names get the same treatment for consistency.
+function cleanFranchiseName(raw) {
+  return String(raw || '').trim().replace(/^\d+(:\d+)?\s+/, '');
+}
+
 function transformFranRows(rows) {
   const byCustomer = {};
   rows.forEach(row => {
-    const name = (row.customer || '').trim() || 'Unknown';
+    const name = cleanFranchiseName(row.customer) || 'Unknown';
     const monthKey = row.d ? String(row.d).slice(0, 7) : null;
     if (!monthKey) return;
     if (!byCustomer[name]) byCustomer[name] = {};
