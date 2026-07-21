@@ -199,6 +199,24 @@ function pctSign(v) {
   return (v >= 0 ? '+' : '') + v.toFixed(1) + '%';
 }
 
+// Null/blank-safe comparator: works across mixed string/number columns
+// (e.g. Category, Subcategory, Pack where some rows are blank) and always
+// pushes blanks to the bottom regardless of sort direction.
+function compareValues(av, bv, dir) {
+  const aEmpty = (av === null || av === undefined || av === '');
+  const bEmpty = (bv === null || bv === undefined || bv === '');
+  if (aEmpty && bEmpty) return 0;
+  if (aEmpty) return 1;
+  if (bEmpty) return -1;
+  let cmp;
+  if (typeof av === 'string' || typeof bv === 'string') {
+    cmp = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' });
+  } else {
+    cmp = av - bv;
+  }
+  return dir === 'asc' ? cmp : -cmp;
+}
+
 // ---------- Tabs ----------
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -318,10 +336,7 @@ function renderRevenue() {
   data.sort((a,b) => {
     const map = { name:'name', total:'rangeTotal', avg:'rangeAvg', trend:'trend' };
     const key = map[revState.sortCol] || 'rangeTotal';
-    let av = a[key], bv = b[key];
-    if (av === null) av = -Infinity; if (bv === null) bv = -Infinity;
-    let cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
-    return revState.sortDir === 'asc' ? cmp : -cmp;
+    return compareValues(a[key], b[key], revState.sortDir);
   });
   document.getElementById('rev-count').textContent = data.length + ' franchises';
 
@@ -369,10 +384,10 @@ function renderRevenue() {
   document.getElementById('rev-prev')?.addEventListener('click', () => { revState.page--; renderRevenue(); });
   document.getElementById('rev-next')?.addEventListener('click', () => { revState.page++; renderRevenue(); });
 
-  // trend chart
+  // trend chart — empty when nothing is selected (Clear selections empties this entirely)
   const monthsRange = REV.months.slice(revState.from, revState.to+1);
   const selectedData = REV.franchises.filter(f => revState.selected.includes(f.name));
-  const datasets = (selectedData.length ? selectedData : data.slice(0,3)).map((f,i) => ({
+  const datasets = selectedData.map((f,i) => ({
     label: f.name, data: f.monthly.slice(revState.from, revState.to+1), borderColor: COLORS[i%COLORS.length], backgroundColor: COLORS[i%COLORS.length]+'20', borderWidth:2, tension:0.3, pointRadius:2, fill:false
   }));
   if (revTrendChart) revTrendChart.destroy();
@@ -427,13 +442,7 @@ function getSkuFiltered() {
 
 function renderSku() {
   let data = getSkuFiltered();
-  data.sort((a,b) => {
-    const key = skuState.sortCol;
-    let av = a[key], bv = b[key];
-    if (av === null || av === undefined) av = -Infinity; if (bv === null || bv === undefined) bv = -Infinity;
-    let cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
-    return skuState.sortDir === 'asc' ? cmp : -cmp;
-  });
+  data.sort((a,b) => compareValues(a[skuState.sortCol], b[skuState.sortCol], skuState.sortDir));
   document.getElementById('sku-count').textContent = data.length + ' SKUs';
 
   const cols = [
@@ -474,9 +483,9 @@ function renderSku() {
   document.getElementById('sku-prev')?.addEventListener('click', () => { skuState.page--; renderSku(); });
   document.getElementById('sku-next')?.addEventListener('click', () => { skuState.page++; renderSku(); });
 
+  // empty when nothing is selected (Clear selections empties this entirely)
   const selectedData = SKU.skus.filter(s => skuState.selected.includes(s.sku));
-  const chosen = selectedData.length ? selectedData : data.slice(0,3);
-  const datasets = chosen.map((s,i) => ({
+  const datasets = selectedData.map((s,i) => ({
     label: s.sku + ' - ' + (s.product||''), data: s.monthly, borderColor: COLORS[i%COLORS.length], backgroundColor: COLORS[i%COLORS.length]+'20', borderWidth:2, tension:0.3, pointRadius:2, spanGaps:true
   }));
   if (skuTrendChart) skuTrendChart.destroy();
@@ -527,13 +536,7 @@ function getMarginFiltered() {
 
 function renderMargin() {
   let data = getMarginFiltered();
-  data.sort((a,b) => {
-    const key = marState.sortCol;
-    let av = a[key], bv = b[key];
-    if (av === null || av === undefined) av = -Infinity; if (bv === null || bv === undefined) bv = -Infinity;
-    let cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv;
-    return marState.sortDir === 'asc' ? cmp : -cmp;
-  });
+  data.sort((a,b) => compareValues(a[marState.sortCol], b[marState.sortCol], marState.sortDir));
   document.getElementById('mar-count').textContent = data.length + ' SKUs';
 
   const cols = [
