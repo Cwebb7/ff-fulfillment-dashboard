@@ -61,10 +61,6 @@ tr.selected td{background:#eaf0fa;}
 #tbl-sku th,#tbl-sku td{padding:6px 8px;font-size:12px;}
 #tbl-sku td.sku-month-cell{color:var(--text-secondary);}
 #tbl-sku .hidden-col{display:none;}
-#tbl-sku th.sku-toggle-th{cursor:default;text-align:center;padding:6px 4px;}
-#tbl-sku th.sku-toggle-th button{padding:3px 8px;border:1px solid #dee2e6;border-radius:5px;background:#fff;font-size:11px;font-weight:700;cursor:pointer;color:var(--text-secondary);}
-#tbl-sku th.sku-toggle-th button:hover{background:#f1f3f5;color:var(--text-primary);}
-#tbl-sku td.sku-toggle-td{background:#f8f9fa;padding:6px 4px;}
 .clear-btn{padding:8px 14px;border:1px solid #dee2e6;border-radius:6px;background:#fff;font-size:12px;font-weight:500;cursor:pointer;color:var(--text-secondary);white-space:nowrap;}
 .clear-btn:hover{background:#f1f3f5;color:var(--text-primary);}
 .live-status{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
@@ -119,7 +115,7 @@ tr.selected td{background:#eaf0fa;}
     </div>
     <div class="chart-row">
       <div class="chart-card"><h3>Total Franchise Revenue by Month</h3><canvas id="chart-overview-trend"></canvas></div>
-      <div class="chart-card"><h3>Revenue by Category (trailing 3mo, SKU price table)</h3><canvas id="chart-overview-cat"></canvas></div>
+      <div class="chart-card"><h3>Revenue by Category (trailing 3mo, live NetSuite SKU sales)</h3><canvas id="chart-overview-cat"></canvas></div>
     </div>
     <div class="chart-row single">
       <div class="chart-card"><h3>Top 10 Franchises by Total Revenue</h3><canvas id="chart-overview-top"></canvas></div>
@@ -8299,10 +8295,15 @@ function renderOverview() {
   document.getElementById('kpi-active-fran').textContent = activeFran;
   document.getElementById('kpi-avg-rev').textContent = fmt(avgPerFranchise, 'currency0');
 
-  const gmVals = MAR.items.map(i => i.gmPct).filter(v => v !== null && v !== undefined);
-  const avgGm = gmVals.reduce((a, b) => a + b, 0) / (gmVals.length || 1);
+  // Revenue-weighted blended GM% across every franchise for the selected
+  // range, from the same live customsearch2714 data behind Margin Analysis
+  // (replaces the old calculation against MAR.items, a mock SKU-level cost
+  // benchmark that was never wired to a real source and always read 0.0%).
+  const rangeRevForGm = MARGIN.franchises.reduce((sum, f) => sum + f.monthlyRev.slice(from, to + 1).reduce((a, b) => a + b, 0), 0);
+  const rangeGmForGm = MARGIN.franchises.reduce((sum, f) => sum + f.monthlyGm.slice(from, to + 1).reduce((a, b) => a + b, 0), 0);
+  const avgGm = rangeRevForGm > 0 ? (rangeGmForGm / rangeRevForGm) * 100 : 0;
   document.getElementById('kpi-avg-gm').textContent = fmt(avgGm, 'percent');
-  document.getElementById('kpi-avg-gm-sub').textContent = gmVals.length + ' priced SKUs';
+  document.getElementById('kpi-avg-gm-sub').textContent = MARGIN.franchises.length ? 'blended, live from NetSuite (' + MARGIN.franchises.length + ' franchises)' : 'awaiting live data';
 
   if (overviewTrendChart) overviewTrendChart.destroy();
   overviewTrendChart = new Chart(document.getElementById('chart-overview-trend').getContext('2d'), {
@@ -8344,12 +8345,16 @@ function renderOverview() {
     }
   });
 
+  // Real revenue (rate * qty summed, not an average of unit prices) for the
+  // trailing 3 months of the selected range — the previous version summed
+  // each SKU's average unit price across a category, which isn't a revenue
+  // figure at all and produced numbers that didn't mean anything.
   const catTotals = {};
   SKU.skus.forEach(s => {
-    const rangeVals = s.monthly.slice(from, to + 1).filter(v => v !== null);
-    const last3v = rangeVals.slice(-3);
-    const avg = last3v.length ? last3v.reduce((a, b) => a + b, 0) / last3v.length : 0;
-    catTotals[s.category] = (catTotals[s.category] || 0) + avg;
+    const revVals = (s.monthlyRevenue || []).slice(from, to + 1);
+    const last3rev = revVals.slice(-3);
+    const sum = last3rev.reduce((a, b) => a + b, 0);
+    catTotals[s.category] = (catTotals[s.category] || 0) + sum;
   });
   const catLabels = Object.keys(catTotals);
   if (overviewCatChart) overviewCatChart.destroy();
@@ -8667,12 +8672,11 @@ const skuState = {
   pageSize: 15,
   selected: [],
   chartFrom: 0,
-  chartTo: SKU.months.length - 1,
-  // Month columns strictly between chartFrom/chartTo are collapsed by
-  // default (only the two boundary months + anything outside the range
-  // stay visible) — monthsExpanded toggles them all back on via the "<>"
-  // header button, and resets to collapsed whenever the range changes.
-  monthsExpanded: false
+  // Month columns strictly between chartFrom/chartTo are always hidden —
+  // only the two boundary months plus anything outside the selected range
+  // stay visible. The From/To selectors are the only control; narrow or
+  // widen them to change which months are hidden.
+  chartTo: SKU.months.length - 1
 };
 let skuTrendChart, skuCatChart;
 
@@ -8745,12 +8749,10 @@ function initSkuControls() {
   toSel.value = skuState.chartTo;
   fromSel.addEventListener('change', () => {
     skuState.chartFrom = +fromSel.value;
-    skuState.monthsExpanded = false;
     renderSku();
   });
   toSel.addEventListener('change', () => {
     skuState.chartTo = +toSel.value;
-    skuState.monthsExpanded = false;
     renderSku();
   });
 }
@@ -8785,27 +8787,14 @@ function renderSku() {
   // Full price-history matrix: SKU/Product/Category/Subcategory/Type,
   // then one sortable column per month in SKU.months, then First/Latest/%
   // Change. Month columns sort via the m{index} fields getSkuFiltered()
-  // attaches to each row. Months strictly between the selected From/To
-  // collapse by default (skuState.monthsExpanded) — a single "<>" header
-  // button toggles them back open without widening From/To itself, and
-  // changing From/To resets back to collapsed.
-  const hasCollapsedRange = skuState.chartTo > skuState.chartFrom + 1;
-  const monthCols = [];
-  SKU.months.forEach((m, i) => {
-    if (i === skuState.chartFrom + 1 && hasCollapsedRange) {
-      monthCols.push({
-        key: '__toggle',
-        label: '',
-        isToggle: true
-      });
-    }
-    const inRange = i > skuState.chartFrom && i < skuState.chartTo;
-    monthCols.push({
-      key: 'm' + i,
-      label: m,
-      hiddenCol: inRange && !skuState.monthsExpanded
-    });
-  });
+  // attaches to each row. Months strictly between the selected From/To are
+  // always hidden — the From/To selectors themselves are the only control
+  // for which months are hidden vs. shown, nothing else to toggle.
+  const monthCols = SKU.months.map((m, i) => ({
+    key: 'm' + i,
+    label: m,
+    hiddenCol: i > skuState.chartFrom && i < skuState.chartTo
+  }));
   const cols = [{
       key: 'sku',
       label: 'SKU'
@@ -8836,12 +8825,7 @@ function renderSku() {
     }
   ];
   const thead = document.querySelector('#tbl-sku thead');
-  thead.innerHTML = '<tr>' + cols.map(c => {
-    if (c.isToggle) {
-      return `<th class="sku-toggle-th"><button id="sku-months-toggle" title="${skuState.monthsExpanded ? 'Collapse months between From/To' : 'Expand months between From/To'}">&lt;&gt;</button></th>`;
-    }
-    return `<th data-key="${c.key}" class="${c.hiddenCol?'hidden-col ':''}${skuState.sortCol===c.key?'sorted '+skuState.sortDir:''}">${c.label}</th>`;
-  }).join('') + '</tr>';
+  thead.innerHTML = '<tr>' + cols.map(c => `<th data-key="${c.key}" class="${c.hiddenCol?'hidden-col ':''}${skuState.sortCol===c.key?'sorted '+skuState.sortDir:''}">${c.label}</th>`).join('') + '</tr>';
   thead.querySelectorAll('th[data-key]').forEach(th => th.addEventListener('click', () => {
     const k = th.dataset.key;
     if (skuState.sortCol === k) skuState.sortDir = skuState.sortDir === 'asc' ? 'desc' : 'asc';
@@ -8851,10 +8835,6 @@ function renderSku() {
     }
     renderSku();
   }));
-  document.getElementById('sku-months-toggle')?.addEventListener('click', () => {
-    skuState.monthsExpanded = !skuState.monthsExpanded;
-    renderSku();
-  });
 
   const start = skuState.page * skuState.pageSize;
   const pageData = data.slice(start, start + skuState.pageSize);
@@ -8862,11 +8842,7 @@ function renderSku() {
   tbody.innerHTML = pageData.map(s => {
     let monthTds = '';
     s.monthly.forEach((v, i) => {
-      if (i === skuState.chartFrom + 1 && hasCollapsedRange) {
-        monthTds += `<td class="sku-toggle-td"></td>`;
-      }
-      const inRange = i > skuState.chartFrom && i < skuState.chartTo;
-      const hidden = inRange && !skuState.monthsExpanded;
+      const hidden = i > skuState.chartFrom && i < skuState.chartTo;
       monthTds += `<td class="sku-month-cell${hidden?' hidden-col':''}">${hidden ? '' : fmt(v, 'currency')}</td>`;
     });
     return `
@@ -9513,13 +9489,18 @@ async function loadLiveRevenue() {
     revState.from = 0;
     revState.to = REV.months.length - 1;
     revState.page = 0;
-    renderOverview();
-    renderRevenue();
 
+    // Populate MARGIN.franchises before the Overview render below — its Avg
+    // Gross Margin KPI reads from MARGIN.franchises (same underlying rows,
+    // no second fetch), so it needs to exist first or that KPI would render
+    // against an empty array on this first live pass.
     MARGIN.franchises = transformMarginRows(rows);
     marLiveState.from = 0;
     marLiveState.to = MARGIN.months.length - 1;
     marLiveState.page = 0;
+
+    renderOverview();
+    renderRevenue();
     renderMarginLive();
 
     setLiveIndicator('live', 'Live from NetSuite');
@@ -9612,13 +9593,23 @@ function transformSkuRows(rows) {
         category: cls.category,
         subcategory: cls.subcategory,
         type: cls.type,
-        byMonth: {}
+        byMonth: {},
+        // Actual dollar revenue per month (rate * qty, summed across every
+        // line), separate from byMonth's per-line rate samples above (which
+        // only track average unit price for the First/Latest/% Change
+        // columns). Revenue by Category on the Overview tab needs this —
+        // summing average unit prices across SKUs is not a revenue figure.
+        revByMonth: {}
       };
     }
     if (!bySku[sku].product && row.itemname) bySku[sku].product = row.itemname;
     if (!bySku[sku].byMonth[monthKey]) bySku[sku].byMonth[monthKey] = [];
     const rate = parseFloat(row.rate);
     if (!isNaN(rate)) bySku[sku].byMonth[monthKey].push(rate);
+    const qty = parseFloat(row.qty);
+    if (!isNaN(rate) && !isNaN(qty)) {
+      bySku[sku].revByMonth[monthKey] = (bySku[sku].revByMonth[monthKey] || 0) + rate * qty;
+    }
   });
 
   const skus = Object.values(bySku).map(s => {
@@ -9628,6 +9619,7 @@ function transformSkuRows(rows) {
       const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
       return Math.round(avg * 100) / 100;
     });
+    const monthlyRevenue = monthKeys.map(k => Math.round((s.revByMonth[k] || 0) * 100) / 100);
     const nonNull = monthly.filter(v => v !== null);
     const first = nonNull.length ? nonNull[0] : null;
     const latest = nonNull.length ? nonNull[nonNull.length - 1] : null;
@@ -9641,6 +9633,7 @@ function transformSkuRows(rows) {
       subcategory: s.subcategory,
       type: s.type,
       monthly,
+      monthlyRevenue,
       first,
       latest,
       changePct
