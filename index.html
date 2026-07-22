@@ -153,7 +153,7 @@ tr.selected td{background:#eaf0fa;}
       <div class="chart-card"><h3>Avg Price Change % by Category (filtered)</h3><canvas id="chart-sku-cat"></canvas></div>
     </div>
     <div class="table-card">
-      <div class="hint">Sourced from a NetSuite SuiteQL export (Sales Order lines, Franchise price level, MAX price per SKU per month) — not yet a live page-load fetch; refresh by re-running the query. Pack Size isn't in the query output yet. Click a row to add/remove it from the price history chart. Click column headers to sort.</div>
+      <div class="hint">Live from NetSuite (Sales Order lines, Franchise price level, average price per SKU per month) via the FF SKU Pricing RESTlet — refreshes automatically on page load, or click "Refresh from NetSuite" above. Pack Size isn't in the query output yet. Click a row to add/remove it from the price history chart. Click column headers to sort.</div>
       <table id="tbl-sku"><thead></thead><tbody></tbody></table>
       <div class="pagination" id="sku-pagination"></div>
     </div>
