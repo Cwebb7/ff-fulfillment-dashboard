@@ -181,7 +181,7 @@ tr.selected td{background:#eaf0fa;}
     </div>
   </div>
 
-  <div class="footer">Franchise Fulfillment Dashboard &middot; Franchise revenue is live from NetSuite &middot; SKU pricing is a NetSuite SuiteQL export snapshot &middot; margin analysis has no source connected yet</div>
+  <div class="footer">Franchise Fulfillment Dashboard &middot; Franchise revenue and SKU pricing (Franchise price level) are live from NetSuite &middot; margin analysis has no source connected yet</div>
 </div>
 
 <script>
@@ -637,17 +637,36 @@ function renderMargin() {
 // spreadsheet data — franchise revenue comes only from this live fetch. If
 // it fails, the Overview/Franchise Revenue tabs show no data rather than
 // falling back to a stale snapshot.
-async function callRESTlet(params = {}) {
+async function callRESTlet(params = {}, target) {
   const res = await fetch('/.netlify/functions/netsuite', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ params })
+    body: JSON.stringify({ params, target })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || `Proxy error ${res.status}`);
   }
   return res.json();
+}
+
+// Combined live-status tracking for the data-source subheading — franchise
+// revenue and SKU pricing load independently/concurrently, so each updates
+// its own slot and we re-render the joined sentence rather than clobbering
+// each other's text.
+const liveState = { revenue: 'loading', sku: 'loading' };
+function updateDataSourceText() {
+  const revText = liveState.revenue === 'live'
+    ? 'Franchise revenue is live from NetSuite (customsearch2714, FF Transactions with Rev, Costs, GM%).'
+    : liveState.revenue === 'error'
+      ? 'Franchise revenue live feed unavailable — no data source connected.'
+      : 'Connecting to NetSuite for franchise revenue…';
+  const skuText = liveState.sku === 'live'
+    ? 'SKU pricing is live from NetSuite (Franchise price level).'
+    : liveState.sku === 'error'
+      ? 'SKU pricing live feed unavailable — showing last snapshot.'
+      : 'Connecting to NetSuite for SKU pricing…';
+  document.getElementById('data-source-sub').textContent = revText + ' ' + skuText + ' Margin analysis has no source connected yet.';
 }
 
 function setLiveIndicator(state, label) {
@@ -719,19 +738,117 @@ async function loadLiveRevenue() {
     renderRevenue();
 
     setLiveIndicator('live', 'Live from NetSuite');
-    document.getElementById('data-source-sub').textContent =
-      'Franchise revenue is live from NetSuite (customsearch2714, FF Transactions with Rev, Costs, GM%). SKU pricing is a NetSuite SuiteQL export snapshot. Margin analysis has no source connected yet.';
+    liveState.revenue = 'live';
+    updateDataSourceText();
   } catch (e) {
     console.warn('Live NetSuite fetch failed:', e.message);
     setLiveIndicator('error', 'Live feed unavailable — no data source connected');
-    document.getElementById('data-source-sub').textContent =
-      'Unable to reach NetSuite — franchise revenue unavailable. SKU pricing is a NetSuite SuiteQL export snapshot. Margin analysis has no source connected yet.';
+    liveState.revenue = 'error';
+    updateDataSourceText();
   } finally {
     btn.disabled = false;
   }
 }
 
 document.getElementById('refresh-live-btn').addEventListener('click', loadLiveRevenue);
+
+// ============================================================
+// LIVE SKU PRICING (NetSuite RESTlet, customscript3339)
+// ============================================================
+// Standalone SuiteScript 2.1 RESTlet using N/query.runSuiteQL — separate
+// script/deployment from the shared `fran` RESTlet above because that one
+// is SuiteScript 1.0 and can't use the N/query module. Filtered to Sales
+// Order lines at the Franchise price level, joined to `classification` for
+// the full Category : Subcategory : Pack Size hierarchy string.
+function parseSkuClassFull(classfull) {
+  if (!classfull) return { category: 'Uncategorized', subcategory: 'Uncategorized', pack: null };
+  const parts = String(classfull).split(':').map(p => p.trim()).filter(Boolean);
+  return {
+    category: parts[0] || 'Uncategorized',
+    subcategory: parts[1] || 'Uncategorized',
+    pack: parts[2] || null
+  };
+}
+
+function monthKeyToLabel(key) {
+  const [yr, mo] = key.split('-');
+  return `${MONTH_NAMES[parseInt(mo, 10) - 1]} ${yr}`;
+}
+
+function transformSkuRows(rows) {
+  const monthKeySet = new Set();
+  rows.forEach(r => { if (r.d) monthKeySet.add(String(r.d).slice(0, 7)); });
+  const monthKeys = [...monthKeySet].sort();
+  const monthLabels = monthKeys.map(monthKeyToLabel);
+
+  const bySku = {};
+  rows.forEach(row => {
+    const sku = row.sku;
+    const monthKey = row.d ? String(row.d).slice(0, 7) : null;
+    if (!sku || !monthKey) return;
+    if (!bySku[sku]) {
+      const cls = parseSkuClassFull(row.classfull);
+      bySku[sku] = {
+        sku, product: row.itemname || null,
+        category: cls.category, subcategory: cls.subcategory, pack: cls.pack,
+        byMonth: {}
+      };
+    }
+    if (!bySku[sku].product && row.itemname) bySku[sku].product = row.itemname;
+    if (!bySku[sku].byMonth[monthKey]) bySku[sku].byMonth[monthKey] = [];
+    const rate = parseFloat(row.rate);
+    if (!isNaN(rate)) bySku[sku].byMonth[monthKey].push(rate);
+  });
+
+  const skus = Object.values(bySku).map(s => {
+    const monthly = monthKeys.map(k => {
+      const vals = s.byMonth[k];
+      if (!vals || !vals.length) return null;
+      const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+      return Math.round(avg * 100) / 100;
+    });
+    const nonNull = monthly.filter(v => v !== null);
+    const first = nonNull.length ? nonNull[0] : null;
+    const latest = nonNull.length ? nonNull[nonNull.length - 1] : null;
+    const changePct = (first !== null && latest !== null && first !== 0)
+      ? Math.round(((latest - first) / first) * 10000) / 100
+      : (first !== null && latest !== null ? 0 : null);
+    return { sku: s.sku, product: s.product, category: s.category, subcategory: s.subcategory, pack: s.pack, monthly, first, latest, changePct };
+  });
+  skus.sort((a, b) => (b.latest || 0) - (a.latest || 0));
+
+  return { months: monthLabels, skus };
+}
+
+async function loadLiveSkuPricing() {
+  try {
+    let rows = [];
+    let page = 0, hasMore = true;
+    while (hasMore && page < 30) {
+      const d = await callRESTlet({ page, pageSize: 1000 }, 'sku');
+      if (d && d.error) throw new Error(d.error);
+      const chunk = d.rows || [];
+      rows.push(...chunk);
+      hasMore = !!d.hasMore;
+      page++;
+    }
+    if (!rows.length) throw new Error('NetSuite returned no rows for SKU pricing');
+
+    const transformed = transformSkuRows(rows);
+    SKU.months = transformed.months;
+    SKU.skus = transformed.skus;
+    skuState.page = 0;
+    initSkuControls();
+    renderSku();
+
+    liveState.sku = 'live';
+    updateDataSourceText();
+  } catch (e) {
+    console.warn('Live SKU pricing fetch failed:', e.message);
+    liveState.sku = 'error';
+    updateDataSourceText();
+  }
+}
 
 // ============================================================
 // INIT
@@ -745,6 +862,7 @@ initMarginControls(); renderMargin();
 // anymore — if this fails, Overview/Franchise Revenue show no data and the
 // live indicator reports the error.
 loadLiveRevenue();
+loadLiveSkuPricing();
 
 </script>
 </body>
