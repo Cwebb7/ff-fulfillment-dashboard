@@ -13,11 +13,16 @@ exports.handler = async function(event) {
   }
   try {
     const body = JSON.parse(event.body || '{}');
-    const { params } = body;
+    const { params, target } = body;
 
     // Use environment variables — fall back to body for local dev
     const accountId = process.env.NS_ACCOUNT_ID || body.accountId;
-    const restletUrl = process.env.NS_RESTLET_URL || body.restletUrl;
+    // `target: 'sku'` routes to the standalone SuiteQL RESTlet built for
+    // live SKU pricing (script 3339). Anything else uses the original
+    // shared multi-type RESTlet (script 2637, `type: 'fran'` etc).
+    const restletUrl = (target === 'sku'
+      ? process.env.NS_SKU_RESTLET_URL
+      : process.env.NS_RESTLET_URL) || body.restletUrl;
     const consumerKey = process.env.NS_CONSUMER_KEY || body.consumerKey;
     const consumerSecret = process.env.NS_CONSUMER_SECRET || body.consumerSecret;
     const tokenId = process.env.NS_TOKEN_ID || body.tokenId;
