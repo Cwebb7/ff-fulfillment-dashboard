@@ -60,6 +60,11 @@ tr.selected td{background:#eaf0fa;}
 .pagination button:disabled{opacity:.4;cursor:default;}
 #tbl-sku th,#tbl-sku td{padding:6px 8px;font-size:12px;}
 #tbl-sku td.sku-month-cell{color:var(--text-secondary);}
+#tbl-sku .hidden-col{display:none;}
+#tbl-sku th.sku-toggle-th{cursor:default;text-align:center;padding:6px 4px;}
+#tbl-sku th.sku-toggle-th button{padding:3px 8px;border:1px solid #dee2e6;border-radius:5px;background:#fff;font-size:11px;font-weight:700;cursor:pointer;color:var(--text-secondary);}
+#tbl-sku th.sku-toggle-th button:hover{background:#f1f3f5;color:var(--text-primary);}
+#tbl-sku td.sku-toggle-td{background:#f8f9fa;padding:6px 4px;}
 .clear-btn{padding:8px 14px;border:1px solid #dee2e6;border-radius:6px;background:#fff;font-size:12px;font-weight:500;cursor:pointer;color:var(--text-secondary);white-space:nowrap;}
 .clear-btn:hover{background:#f1f3f5;color:var(--text-primary);}
 .live-status{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
@@ -147,9 +152,9 @@ tr.selected td{background:#eaf0fa;}
       <input type="text" id="sku-search" placeholder="Search SKU or product name...">
       <div class="grp"><label>Category</label><select id="sku-category"><option value="">All</option></select></div>
       <div class="grp"><label>Subcategory</label><select id="sku-subcategory"><option value="">All</option></select></div>
+      <div class="grp"><label>Type</label><select id="sku-type"><option value="">All</option></select></div>
       <div class="grp"><label>From</label><select id="sku-from"></select></div>
       <div class="grp"><label>To</label><select id="sku-to"></select></div>
-      <div class="grp"><label for="sku-hide-range">Hide prices in selected date range</label><input type="checkbox" id="sku-hide-range"></div>
       <button class="clear-btn" id="sku-clear-btn">Clear selections</button>
       <div class="result-count" id="sku-count"></div>
     </div>
@@ -189,9 +194,6 @@ tr.selected td{background:#eaf0fa;}
     <div class="chart-row">
       <div class="chart-card"><h3>Revenue / COGS / GM% by Month</h3><canvas id="chart-mar-trend"></canvas></div>
       <div class="chart-card"><h3>GM % Trend — Selected Franchises (click rows below, max 5)</h3><canvas id="chart-mar-gm-trend"></canvas></div>
-    </div>
-    <div class="chart-row single">
-      <div class="chart-card"><h3 id="chart-mar-section-title">Avg COGS% vs GM% by Section</h3><canvas id="chart-mar-section"></canvas></div>
     </div>
     <div class="table-card">
       <div class="hint">Click a row to add/remove it from the GM % trend chart. Click column headers to sort.</div>
@@ -8658,6 +8660,7 @@ const skuState = {
   search: '',
   category: '',
   subcategory: '',
+  type: '',
   sortCol: 'latest',
   sortDir: 'desc',
   page: 0,
@@ -8665,7 +8668,11 @@ const skuState = {
   selected: [],
   chartFrom: 0,
   chartTo: SKU.months.length - 1,
-  hideRange: false
+  // Month columns strictly between chartFrom/chartTo are collapsed by
+  // default (only the two boundary months + anything outside the range
+  // stay visible) — monthsExpanded toggles them all back on via the "<>"
+  // header button, and resets to collapsed whenever the range changes.
+  monthsExpanded: false
 };
 let skuTrendChart, skuCatChart;
 
@@ -8674,22 +8681,39 @@ function initSkuControls() {
   const catSel = document.getElementById('sku-category');
   cats.forEach(c => catSel.innerHTML += `<option value="${c}">${c}</option>`);
   const subcatSel = document.getElementById('sku-subcategory');
+  const typeSel = document.getElementById('sku-type');
 
   function refreshSubcats() {
     const cur = catSel.value;
     const subs = [...new Set(SKU.skus.filter(s => !cur || s.category === cur).map(s => s.subcategory).filter(Boolean))].sort();
     subcatSel.innerHTML = '<option value="">All</option>' + subs.map(s => `<option value="${s}">${s}</option>`).join('');
   }
+  function refreshTypes() {
+    const curCat = catSel.value;
+    const curSub = subcatSel.value;
+    const types = [...new Set(SKU.skus.filter(s => (!curCat || s.category === curCat) && (!curSub || s.subcategory === curSub)).map(s => s.type).filter(Boolean))].sort();
+    typeSel.innerHTML = '<option value="">All</option>' + types.map(t => `<option value="${t}">${t}</option>`).join('');
+  }
   refreshSubcats();
+  refreshTypes();
   catSel.addEventListener('change', () => {
     skuState.category = catSel.value;
     skuState.subcategory = '';
+    skuState.type = '';
     refreshSubcats();
+    refreshTypes();
     skuState.page = 0;
     renderSku();
   });
   subcatSel.addEventListener('change', () => {
     skuState.subcategory = subcatSel.value;
+    skuState.type = '';
+    refreshTypes();
+    skuState.page = 0;
+    renderSku();
+  });
+  typeSel.addEventListener('change', () => {
+    skuState.type = typeSel.value;
     skuState.page = 0;
     renderSku();
   });
@@ -8721,14 +8745,12 @@ function initSkuControls() {
   toSel.value = skuState.chartTo;
   fromSel.addEventListener('change', () => {
     skuState.chartFrom = +fromSel.value;
+    skuState.monthsExpanded = false;
     renderSku();
   });
   toSel.addEventListener('change', () => {
     skuState.chartTo = +toSel.value;
-    renderSku();
-  });
-  document.getElementById('sku-hide-range').addEventListener('change', (e) => {
-    skuState.hideRange = e.target.checked;
+    skuState.monthsExpanded = false;
     renderSku();
   });
 }
@@ -8737,6 +8759,7 @@ function getSkuFiltered() {
   return SKU.skus.filter(s => {
     if (skuState.category && s.category !== skuState.category) return false;
     if (skuState.subcategory && s.subcategory !== skuState.subcategory) return false;
+    if (skuState.type && s.type !== skuState.type) return false;
     if (skuState.search) {
       const hay = (s.sku + ' ' + (s.product || '')).toLowerCase();
       if (!hay.includes(skuState.search)) return false;
@@ -8762,11 +8785,27 @@ function renderSku() {
   // Full price-history matrix: SKU/Product/Category/Subcategory/Type,
   // then one sortable column per month in SKU.months, then First/Latest/%
   // Change. Month columns sort via the m{index} fields getSkuFiltered()
-  // attaches to each row.
-  const monthCols = SKU.months.map((m, i) => ({
-    key: 'm' + i,
-    label: m
-  }));
+  // attaches to each row. Months strictly between the selected From/To
+  // collapse by default (skuState.monthsExpanded) — a single "<>" header
+  // button toggles them back open without widening From/To itself, and
+  // changing From/To resets back to collapsed.
+  const hasCollapsedRange = skuState.chartTo > skuState.chartFrom + 1;
+  const monthCols = [];
+  SKU.months.forEach((m, i) => {
+    if (i === skuState.chartFrom + 1 && hasCollapsedRange) {
+      monthCols.push({
+        key: '__toggle',
+        label: '',
+        isToggle: true
+      });
+    }
+    const inRange = i > skuState.chartFrom && i < skuState.chartTo;
+    monthCols.push({
+      key: 'm' + i,
+      label: m,
+      hiddenCol: inRange && !skuState.monthsExpanded
+    });
+  });
   const cols = [{
       key: 'sku',
       label: 'SKU'
@@ -8797,8 +8836,13 @@ function renderSku() {
     }
   ];
   const thead = document.querySelector('#tbl-sku thead');
-  thead.innerHTML = '<tr>' + cols.map(c => `<th data-key="${c.key}" class="${skuState.sortCol===c.key?'sorted '+skuState.sortDir:''}">${c.label}</th>`).join('') + '</tr>';
-  thead.querySelectorAll('th').forEach(th => th.addEventListener('click', () => {
+  thead.innerHTML = '<tr>' + cols.map(c => {
+    if (c.isToggle) {
+      return `<th class="sku-toggle-th"><button id="sku-months-toggle" title="${skuState.monthsExpanded ? 'Collapse months between From/To' : 'Expand months between From/To'}">&lt;&gt;</button></th>`;
+    }
+    return `<th data-key="${c.key}" class="${c.hiddenCol?'hidden-col ':''}${skuState.sortCol===c.key?'sorted '+skuState.sortDir:''}">${c.label}</th>`;
+  }).join('') + '</tr>';
+  thead.querySelectorAll('th[data-key]').forEach(th => th.addEventListener('click', () => {
     const k = th.dataset.key;
     if (skuState.sortCol === k) skuState.sortDir = skuState.sortDir === 'asc' ? 'desc' : 'asc';
     else {
@@ -8807,21 +8851,33 @@ function renderSku() {
     }
     renderSku();
   }));
+  document.getElementById('sku-months-toggle')?.addEventListener('click', () => {
+    skuState.monthsExpanded = !skuState.monthsExpanded;
+    renderSku();
+  });
 
   const start = skuState.page * skuState.pageSize;
   const pageData = data.slice(start, start + skuState.pageSize);
   const tbody = document.querySelector('#tbl-sku tbody');
-  tbody.innerHTML = pageData.map(s => `
+  tbody.innerHTML = pageData.map(s => {
+    let monthTds = '';
+    s.monthly.forEach((v, i) => {
+      if (i === skuState.chartFrom + 1 && hasCollapsedRange) {
+        monthTds += `<td class="sku-toggle-td"></td>`;
+      }
+      const inRange = i > skuState.chartFrom && i < skuState.chartTo;
+      const hidden = inRange && !skuState.monthsExpanded;
+      monthTds += `<td class="sku-month-cell${hidden?' hidden-col':''}">${hidden ? '' : fmt(v, 'currency')}</td>`;
+    });
+    return `
     <tr data-sku="${s.sku}" class="${skuState.selected.includes(s.sku)?'selected':''}">
       <td>${s.sku}</td><td>${s.product||''}</td><td><span class="pill">${s.category||''}</span></td>
       <td>${s.subcategory||''}</td><td>${s.type||''}</td>
-      ${s.monthly.map((v, i) => {
-        const hidden = skuState.hideRange && i >= skuState.chartFrom && i <= skuState.chartTo;
-        return `<td class="sku-month-cell">${hidden ? '' : fmt(v, 'currency')}</td>`;
-      }).join('')}
+      ${monthTds}
       <td>${fmt(s.first,'currency')}</td><td>${fmt(s.latest,'currency')}</td>
       <td class="${pctClass(s.changePct)}">${s.changePct===null?'-':pctSign(s.changePct)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   tbody.querySelectorAll('tr').forEach(tr => tr.addEventListener('click', () => {
     const sku = tr.dataset.sku;
     const idx = skuState.selected.indexOf(sku);
@@ -8940,141 +8996,14 @@ function renderSku() {
 }
 
 // ============================================================
-// MARGIN VIEW
+// MARGIN VIEW (legacy)
 // ============================================================
-const marState = {
-  search: '',
-  section: '',
-  quarter: 'q1',
-  sortCol: 'currentPrice',
-  sortDir: 'desc',
-  page: 0,
-  pageSize: 15
-};
-const QUARTER_LABELS = {
-  q1: 'Jan–Mar 2026 (Q1)',
-  q2: 'Apr–Jun 2026 (Q2)',
-  q3: 'Jul–Sep 2026 (Q3)'
-};
-let marSectionChart;
-
-// NOTE: initMarginControls()/renderMargin()/marState below drive ONLY the
-// legacy "Section" + "Luna cost quarter" benchmark chart (chart-mar-section),
-// which stays wired to MAR.items — a separate, still-not-connected manual
-// dataset that is NOT part of customsearch2714 (see LIVE MARGIN ANALYSIS
-// section further down for the live franchise-level Revenue/COGS/GM% data,
-// which owns #tbl-margin, #mar-pagination, #mar-count and the KPI cards).
-// #mar-search now belongs to the live section instead (see
-// initMarginLiveControls) since MAR.items has no per-SKU search fields wired
-// to a live source yet.
-function initMarginControls() {
-  const sections = [...new Set(MAR.items.map(i => i.section))].sort();
-  const sel = document.getElementById('mar-section');
-  sections.forEach(s => sel.innerHTML += `<option value="${s}">${s}</option>`);
-  sel.addEventListener('change', () => {
-    marState.section = sel.value;
-    marState.page = 0;
-    renderMargin();
-  });
-  document.getElementById('mar-quarter').addEventListener('change', (e) => {
-    marState.quarter = e.target.value;
-    renderMargin();
-  });
-}
-
-// Recompute COGS% / GM% against the selected quarter's Luna cost vs current price,
-// rather than relying on the static cogsPct/gmPct in the source data (which was
-// fixed to Q1). Falls back to '-' when either input is missing.
-function withQuarterMargin(item) {
-  const lunaCost = item[marState.quarter];
-  const hasBoth = lunaCost !== null && lunaCost !== undefined && item.currentPrice !== null && item.currentPrice !== undefined && item.currentPrice !== 0;
-  const cogsPct = hasBoth ? (lunaCost / item.currentPrice) * 100 : null;
-  const gmPct = hasBoth ? 100 - cogsPct : null;
-  return {
-    ...item,
-    cogsPct,
-    gmPct,
-    lunaCost
-  };
-}
-
-function getMarginFiltered() {
-  return MAR.items.filter(i => {
-    if (marState.section && i.section !== marState.section) return false;
-    if (marState.search) {
-      const hay = ((i.variety || '') + ' ' + (i.sku || '') + ' ' + (i.grind || '')).toLowerCase();
-      if (!hay.includes(marState.search)) return false;
-    }
-    return true;
-  }).map(withQuarterMargin);
-}
-
-function renderMargin() {
-  let data = getMarginFiltered();
-
-  const qLabel = QUARTER_LABELS[marState.quarter];
-  const bySection = {};
-  data.forEach(i => {
-    if (!bySection[i.section]) bySection[i.section] = {
-      cogs: [],
-      gm: []
-    };
-    if (i.cogsPct !== null) bySection[i.section].cogs.push(i.cogsPct);
-    if (i.gmPct !== null) bySection[i.section].gm.push(i.gmPct);
-  });
-  const secLabels = Object.keys(bySection);
-  const cogsAvg = secLabels.map(s => {
-    const a = bySection[s].cogs;
-    return a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
-  });
-  const gmAvg = secLabels.map(s => {
-    const a = bySection[s].gm;
-    return a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
-  });
-  document.getElementById('chart-mar-section-title').textContent = `Avg COGS% vs GM% by Section (${qLabel} Luna cost)`;
-  if (marSectionChart) marSectionChart.destroy();
-  marSectionChart = new Chart(document.getElementById('chart-mar-section').getContext('2d'), {
-    type: 'bar',
-    data: {
-      labels: secLabels,
-      datasets: [{
-          label: 'COGS %',
-          data: cogsAvg,
-          backgroundColor: COLORS[3] + 'CC',
-          borderRadius: 4
-        },
-        {
-          label: 'GM %',
-          data: gmAvg,
-          backgroundColor: COLORS[2] + 'CC',
-          borderRadius: 4
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          position: 'top'
-        },
-        tooltip: {
-          callbacks: {
-            label: c => c.dataset.label + ': ' + c.parsed.y.toFixed(1) + '%'
-          }
-        }
-      },
-      scales: {
-        y: {
-          ticks: {
-            callback: v => v.toFixed(0) + '%'
-          }
-        }
-      }
-    }
-  });
-}
-
+// The "Section" + "Luna cost quarter" toolbar selects on the Margin
+// Analysis tab are left in place (per the standing note in the hint text)
+// but the chart they used to drive (Avg COGS% vs GM% by Section) has been
+// removed at the user's request, along with the rendering code that only
+// existed to feed it. MAR.items itself is untouched — it's still read
+// elsewhere (Overview tab's gross-margin KPI).
 // ============================================================
 // LIVE MARGIN ANALYSIS (franchise-level Revenue/COGS/GM%, customsearch2714)
 // ============================================================
@@ -9781,8 +9710,6 @@ initRevenueControls();
 renderRevenue();
 initSkuControls();
 renderSku();
-initMarginControls();
-renderMargin();
 initMarginLiveControls();
 renderMarginLive();
 
