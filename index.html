@@ -847,14 +847,26 @@ function transformSkuRows(rows) {
 async function loadLiveSkuPricing() {
   try {
     let rows = [];
-    let page = 0, hasMore = true;
-    while (hasMore && page < 30) {
-      const d = await callRESTlet({ page, pageSize: 1000 }, 'sku');
+    // Keyset (cursor) pagination, not OFFSET-based: this account has live
+    // order activity, and OFFSET/FETCH pagination is not stable when rows
+    // are inserted mid-fetch (every later page's OFFSET silently shifts).
+    // The RESTlet returns a cursor { afterDate, afterId } anchored to the
+    // last row of each page; passing that back always continues strictly
+    // after what was already fetched, so a reload can't skip or duplicate
+    // rows even if new orders land in NetSuite between pages.
+    let cursor = null;
+    let hasMore = true;
+    let iterations = 0;
+    while (hasMore && iterations < 60) {
+      const params = { pageSize: 1000 };
+      if (cursor) { params.afterDate = cursor.afterDate; params.afterId = cursor.afterId; }
+      const d = await callRESTlet(params, 'sku');
       if (d && d.error) throw new Error(d.error);
       const chunk = d.rows || [];
       rows.push(...chunk);
       hasMore = !!d.hasMore;
-      page++;
+      cursor = d.cursor || cursor;
+      iterations++;
     }
     if (!rows.length) throw new Error('NetSuite returned no rows for SKU pricing');
 
