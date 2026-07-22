@@ -775,16 +775,40 @@ function monthKeyToLabel(key) {
   return `${MONTH_NAMES[parseInt(mo, 10) - 1]} ${yr}`;
 }
 
+// NetSuite's SuiteQL returns tranDate as a locale-formatted string (e.g.
+// "10/1/2024", M/D/YYYY) rather than ISO — parse that explicitly instead of
+// assuming an ISO "YYYY-MM-DD" prefix, which silently produced garbage
+// month keys ("undefined 10/1/20") the first time this shipped.
+function dateToMonthKey(d) {
+  if (!d) return null;
+  const s = String(d).trim();
+  const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (mdy) {
+    const month = mdy[1].padStart(2, '0');
+    const year = mdy[3];
+    return `${year}-${month}`;
+  }
+  const iso = s.match(/^(\d{4})-(\d{1,2})/);
+  if (iso) {
+    return `${iso[1]}-${iso[2].padStart(2, '0')}`;
+  }
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}`;
+  }
+  return null;
+}
+
 function transformSkuRows(rows) {
   const monthKeySet = new Set();
-  rows.forEach(r => { if (r.d) monthKeySet.add(String(r.d).slice(0, 7)); });
+  rows.forEach(r => { const k = dateToMonthKey(r.d); if (k) monthKeySet.add(k); });
   const monthKeys = [...monthKeySet].sort();
   const monthLabels = monthKeys.map(monthKeyToLabel);
 
   const bySku = {};
   rows.forEach(row => {
     const sku = row.sku;
-    const monthKey = row.d ? String(row.d).slice(0, 7) : null;
+    const monthKey = dateToMonthKey(row.d);
     if (!sku || !monthKey) return;
     if (!bySku[sku]) {
       const cls = parseSkuClassFull(row.classfull);
