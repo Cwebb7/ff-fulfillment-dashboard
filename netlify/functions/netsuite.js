@@ -18,8 +18,10 @@ exports.handler = async function(event) {
     // Use environment variables — fall back to body for local dev
     const accountId = process.env.NS_ACCOUNT_ID || body.accountId;
     // `target: 'sku'` routes to the standalone SuiteQL RESTlet built for
-    // live SKU pricing (script 3339). Anything else uses the original
-    // shared multi-type RESTlet (script 2637, `type: 'fran'` etc).
+    // live SKU pricing (script 3340 — recreated after script 3339 got
+    // stuck at API VERSION 1.0 and couldn't run its N/query-based code).
+    // Anything else uses the original shared multi-type RESTlet
+    // (script 2637, `type: 'fran'` etc).
     const restletUrl = (target === 'sku'
       ? process.env.NS_SKU_RESTLET_URL
       : process.env.NS_RESTLET_URL) || body.restletUrl;
