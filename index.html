@@ -8813,13 +8813,7 @@ function renderSku() {
       label: 'Type'
     },
     ...monthCols,
-    {
-      key: 'first',
-      label: 'First Price'
-    }, {
-      key: 'latest',
-      label: 'Latest Price'
-    }, {
+        {
       key: 'changePct',
       label: '% Change'
     }
@@ -8845,13 +8839,15 @@ function renderSku() {
       const hidden = i > skuState.chartFrom && i < skuState.chartTo;
       monthTds += `<td class="sku-month-cell${hidden?' hidden-col':''}">${hidden ? '' : fmt(v, 'currency')}</td>`;
     });
+    const fromVal = s.monthly[skuState.chartFrom];
+    const toVal = s.monthly[skuState.chartTo];
+    const rangePct = (fromVal!=null && toVal!=null && fromVal!==0) ? Math.round(((toVal - fromVal) / fromVal) * 10000) / 100 : (fromVal!=null && toVal!=null ? 0 : null);
     return `
     <tr data-sku="${s.sku}" class="${skuState.selected.includes(s.sku)?'selected':''}">
       <td>${s.sku}</td><td>${s.product||''}</td><td><span class="pill">${s.category||''}</span></td>
       <td>${s.subcategory||''}</td><td>${s.type||''}</td>
       ${monthTds}
-      <td>${fmt(s.first,'currency')}</td><td>${fmt(s.latest,'currency')}</td>
-      <td class="${pctClass(s.changePct)}">${s.changePct===null?'-':pctSign(s.changePct)}</td>
+      <td class="${pctClass(rangePct)}">${rangePct===null?'-':pctSign(rangePct)}</td>
     </tr>`;
   }).join('');
   tbody.querySelectorAll('tr').forEach(tr => tr.addEventListener('click', () => {
