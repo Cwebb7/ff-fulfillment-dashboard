@@ -8758,10 +8758,10 @@ function initSkuControls() {
     renderSku();
   });
   const toggleMonthsBtn = document.getElementById('sku-toggle-months-btn');
-  toggleMonthsBtn.addEventListener('click', () => {
+  toggleMonthsBtn.onclick = () => {
     skuState.showAllMonths = !skuState.showAllMonths;
     renderSku();
-  });
+  };
 }
 
 function getSkuFiltered() {
@@ -8779,7 +8779,7 @@ function getSkuFiltered() {
     // existing generic column-sort mechanism (compareValues on a[sortCol])
     // works for the new per-month price columns without a special case.
     const monthFields = {};
-    s.monthly.forEach((v, i) => {
+    s.monthlyFilled.forEach((v, i) => {
       monthFields['m' + i] = v;
     });
     return { ...s, ...monthFields };
@@ -8799,10 +8799,12 @@ function renderSku() {
   // attaches to each row. Months strictly between the selected From/To are
   // always hidden — the From/To selectors themselves are the only control
   // for which months are hidden vs. shown, nothing else to toggle.
+  const lo = Math.min(skuState.chartFrom, skuState.chartTo);
+  const hi = Math.max(skuState.chartFrom, skuState.chartTo);
   const monthCols = SKU.months.map((m, i) => ({
     key: 'm' + i,
     label: m,
-    hiddenCol: i < skuState.chartFrom || i > skuState.chartTo || (!skuState.showAllMonths && i > skuState.chartFrom && i < skuState.chartTo)
+    hiddenCol: i < lo || i > hi || (!skuState.showAllMonths && i > lo && i < hi)
   }));
   const cols = [{
       key: 'sku',
@@ -8844,12 +8846,12 @@ function renderSku() {
   const tbody = document.querySelector('#tbl-sku tbody');
   tbody.innerHTML = pageData.map(s => {
     let monthTds = '';
-    s.monthly.forEach((v, i) => {
-      const hidden = i < skuState.chartFrom || i > skuState.chartTo || (!skuState.showAllMonths && i > skuState.chartFrom && i < skuState.chartTo);
+    s.monthlyFilled.forEach((v, i) => {
+      const hidden = i < lo || i > hi || (!skuState.showAllMonths && i > lo && i < hi);
       monthTds += `<td class="sku-month-cell${hidden?' hidden-col':''}">${hidden ? '' : fmt(v, 'currency')}</td>`;
     });
-    const fromRaw = s.monthly[skuState.chartFrom];
-    const toRaw = s.monthly[skuState.chartTo];
+    const fromRaw = s.monthlyFilled[lo];
+    const toRaw = s.monthlyFilled[hi];
     const fromVal = fromRaw != null ? fromRaw : s.first;
     const toVal = toRaw != null ? toRaw : s.latest;
     const rangePct = (fromVal!=null && toVal!=null && fromVal!==0) ? Math.round(((toVal - fromVal) / fromVal) * 10000) / 100 : (fromVal!=null && toVal!=null ? 0 : null);
@@ -8885,11 +8887,13 @@ function renderSku() {
   // empty when nothing is selected (Clear selections empties this entirely).
   // Limited to the selected From/To range so switching the range re-renders
   // the chart without needing to reselect SKUs.
-  const skuChartMonths = SKU.months.slice(skuState.chartFrom, skuState.chartTo + 1);
+  const lo = Math.min(skuState.chartFrom, skuState.chartTo);
+  const hi = Math.max(skuState.chartFrom, skuState.chartTo);
+  const skuChartMonths = SKU.months.slice(lo, hi + 1);
   const selectedData = SKU.skus.filter(s => skuState.selected.includes(s.sku));
   const datasets = selectedData.map((s, i) => ({
     label: s.sku + ' - ' + (s.product || ''),
-    data: s.monthly.slice(skuState.chartFrom, skuState.chartTo + 1),
+    data: s.monthlyFilled.slice(lo, hi + 1),
     borderColor: COLORS[i % COLORS.length],
     backgroundColor: COLORS[i % COLORS.length] + '20',
     borderWidth: 2,
@@ -9628,6 +9632,11 @@ function transformSkuRows(rows) {
     });
     const monthlyRevenue = monthKeys.map(k => Math.round((s.revByMonth[k] || 0) * 100) / 100);
     const nonNull = monthly.filter(v => v !== null);
+    let lastKnownPrice = null;
+    const monthlyFilled = monthly.map(v => {
+      if (v !== null) lastKnownPrice = v;
+      return v !== null ? v : lastKnownPrice;
+    });
     const first = nonNull.length ? nonNull[0] : null;
     const latest = nonNull.length ? nonNull[nonNull.length - 1] : null;
     const changePct = (first !== null && latest !== null && first !== 0) ?
@@ -9640,6 +9649,7 @@ function transformSkuRows(rows) {
       subcategory: s.subcategory,
       type: s.type,
       monthly,
+      monthlyFilled,
       monthlyRevenue,
       first,
       latest,
