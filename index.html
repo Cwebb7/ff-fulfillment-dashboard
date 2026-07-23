@@ -8779,7 +8779,7 @@ function getSkuFiltered() {
     // existing generic column-sort mechanism (compareValues on a[sortCol])
     // works for the new per-month price columns without a special case.
     const monthFields = {};
-    s.monthlyFilled.forEach((v, i) => {
+    (s.monthlyFilled || s.monthly).forEach((v, i) => {
       monthFields['m' + i] = v;
     });
     return { ...s, ...monthFields };
@@ -8846,12 +8846,12 @@ function renderSku() {
   const tbody = document.querySelector('#tbl-sku tbody');
   tbody.innerHTML = pageData.map(s => {
     let monthTds = '';
-    s.monthlyFilled.forEach((v, i) => {
+    (s.monthlyFilled || s.monthly).forEach((v, i) => {
       const hidden = i < lo || i > hi || (!skuState.showAllMonths && i > lo && i < hi);
       monthTds += `<td class="sku-month-cell${hidden?' hidden-col':''}">${hidden ? '' : fmt(v, 'currency')}</td>`;
     });
-    const fromRaw = s.monthlyFilled[lo];
-    const toRaw = s.monthlyFilled[hi];
+    const fromRaw = (s.monthlyFilled || s.monthly)[lo];
+    const toRaw = (s.monthlyFilled || s.monthly)[hi];
     const fromVal = fromRaw != null ? fromRaw : s.first;
     const toVal = toRaw != null ? toRaw : s.latest;
     const rangePct = (fromVal!=null && toVal!=null && fromVal!==0) ? Math.round(((toVal - fromVal) / fromVal) * 10000) / 100 : (fromVal!=null && toVal!=null ? 0 : null);
@@ -8891,7 +8891,7 @@ function renderSku() {
   const selectedData = SKU.skus.filter(s => skuState.selected.includes(s.sku));
   const datasets = selectedData.map((s, i) => ({
     label: s.sku + ' - ' + (s.product || ''),
-    data: s.monthlyFilled.slice(lo, hi + 1),
+    data: (s.monthlyFilled || s.monthly).slice(lo, hi + 1),
     borderColor: COLORS[i % COLORS.length],
     backgroundColor: COLORS[i % COLORS.length] + '20',
     borderWidth: 2,
