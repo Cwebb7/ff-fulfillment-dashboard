@@ -8887,8 +8887,6 @@ function renderSku() {
   // empty when nothing is selected (Clear selections empties this entirely).
   // Limited to the selected From/To range so switching the range re-renders
   // the chart without needing to reselect SKUs.
-  const lo = Math.min(skuState.chartFrom, skuState.chartTo);
-  const hi = Math.max(skuState.chartFrom, skuState.chartTo);
   const skuChartMonths = SKU.months.slice(lo, hi + 1);
   const selectedData = SKU.skus.filter(s => skuState.selected.includes(s.sku));
   const datasets = selectedData.map((s, i) => ({
