@@ -151,6 +151,7 @@ tr.selected td{background:#eaf0fa;}
       <div class="grp"><label>Type</label><select id="sku-type"><option value="">All</option></select></div>
       <div class="grp"><label>From</label><select id="sku-from"></select></div>
       <div class="grp"><label>To</label><select id="sku-to"></select></div>
+      <button class="clear-btn" id="sku-toggle-months-btn">Show all months</button>
       <button class="clear-btn" id="sku-clear-btn">Clear selections</button>
       <div class="result-count" id="sku-count"></div>
     </div>
@@ -8671,6 +8672,7 @@ const skuState = {
   page: 0,
   pageSize: 15,
   selected: [],
+  showAllMonths: false,
   chartFrom: 0,
   // Month columns strictly between chartFrom/chartTo are always hidden —
   // only the two boundary months plus anything outside the selected range
@@ -8755,6 +8757,11 @@ function initSkuControls() {
     skuState.chartTo = +toSel.value;
     renderSku();
   });
+  const toggleMonthsBtn = document.getElementById('sku-toggle-months-btn');
+  toggleMonthsBtn.addEventListener('click', () => {
+    skuState.showAllMonths = !skuState.showAllMonths;
+    renderSku();
+  });
 }
 
 function getSkuFiltered() {
@@ -8783,6 +8790,8 @@ function renderSku() {
   let data = getSkuFiltered();
   data.sort((a, b) => compareValues(a[skuState.sortCol], b[skuState.sortCol], skuState.sortDir));
   document.getElementById('sku-count').textContent = data.length + ' SKUs';
+  const toggleMonthsBtn = document.getElementById('sku-toggle-months-btn');
+  if (toggleMonthsBtn) toggleMonthsBtn.textContent = skuState.showAllMonths ? 'Hide months' : 'Show all months';
 
   // Full price-history matrix: SKU/Product/Category/Subcategory/Type,
   // then one sortable column per month in SKU.months, then First/Latest/%
@@ -8793,7 +8802,7 @@ function renderSku() {
   const monthCols = SKU.months.map((m, i) => ({
     key: 'm' + i,
     label: m,
-    hiddenCol: i > skuState.chartFrom && i < skuState.chartTo
+    hiddenCol: i < skuState.chartFrom || i > skuState.chartTo || (!skuState.showAllMonths && i > skuState.chartFrom && i < skuState.chartTo)
   }));
   const cols = [{
       key: 'sku',
@@ -8836,11 +8845,13 @@ function renderSku() {
   tbody.innerHTML = pageData.map(s => {
     let monthTds = '';
     s.monthly.forEach((v, i) => {
-      const hidden = i > skuState.chartFrom && i < skuState.chartTo;
+      const hidden = i < skuState.chartFrom || i > skuState.chartTo || (!skuState.showAllMonths && i > skuState.chartFrom && i < skuState.chartTo);
       monthTds += `<td class="sku-month-cell${hidden?' hidden-col':''}">${hidden ? '' : fmt(v, 'currency')}</td>`;
     });
-    const fromVal = s.monthly[skuState.chartFrom];
-    const toVal = s.monthly[skuState.chartTo];
+    const fromRaw = s.monthly[skuState.chartFrom];
+    const toRaw = s.monthly[skuState.chartTo];
+    const fromVal = fromRaw != null ? fromRaw : s.first;
+    const toVal = toRaw != null ? toRaw : s.latest;
     const rangePct = (fromVal!=null && toVal!=null && fromVal!==0) ? Math.round(((toVal - fromVal) / fromVal) * 10000) / 100 : (fromVal!=null && toVal!=null ? 0 : null);
     return `
     <tr data-sku="${s.sku}" class="${skuState.selected.includes(s.sku)?'selected':''}">
